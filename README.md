@@ -4,7 +4,7 @@ Atlas is a local, Docker-first AI platform built around Ollama, Open WebUI, Qdra
 
 ## Version
 
-Current API version: `0.5.0`
+Current API version: `0.6.0`
 
 ## Project Layout
 
@@ -71,6 +71,8 @@ Do not expose Atlas directly to the internet. Use VLAN firewall rules, VPN, or a
 | `GET /models` | Available Ollama models |
 | `POST /chat` | Non-streaming Ollama generation |
 | `POST /chat/grounded` | Chat using Atlas memory and document context |
+| `GET /v1/models` | OpenAI-compatible model discovery |
+| `POST /v1/chat/completions` | OpenAI-compatible grounded chat for Open WebUI |
 | `POST /embeddings` | Create an embedding for text |
 | `POST /memory` | Store text in Atlas memory |
 | `GET /memory/search` | Search Atlas memory |
@@ -120,8 +122,10 @@ curl http://localhost:8000/health
 curl http://localhost:8000/version
 curl http://localhost:8000/status
 curl http://localhost:8000/models
+curl http://localhost:8000/v1/models
 curl -Method POST http://localhost:8000/chat -ContentType "application/json" -Body '{"prompt":"Say hello in one short sentence."}'
 curl -Method POST http://localhost:8000/chat/grounded -ContentType "application/json" -Body '{"prompt":"Which VLAN are the Apple TVs assigned?","retrieval_limit":4}'
+curl -Method POST http://localhost:8000/v1/chat/completions -ContentType "application/json" -Body '{"model":"atlas-grounded","messages":[{"role":"user","content":"Which VLAN are the Apple TVs assigned?"}]}'
 curl -Method POST http://localhost:8000/embeddings -ContentType "application/json" -Body '{"text":"Apple TVs are assigned to VLAN 40."}'
 curl -Method POST http://localhost:8000/memory -ContentType "application/json" -Body '{"text":"Apple TVs are assigned to VLAN 40.","source":"manual-note","metadata":{"client":"Los Padrinos"}}'
 curl "http://localhost:8000/memory/search?query=apple%20tv%20vlan&limit=3"
@@ -130,6 +134,30 @@ curl "http://localhost:8000/documents/search?query=apple%20tv%20vlan&limit=3"
 ```
 
 Atlas uses `llama3.1:8b` for chat and `nomic-embed-text` for embeddings by default.
+
+## Open WebUI
+
+Atlas exposes an internal OpenAI-compatible API for Open WebUI.
+
+Use this base URL from inside the Docker network:
+
+```text
+http://atlas-api:8000/v1
+```
+
+Use this base URL from the services VLAN:
+
+```text
+http://10.87.40.69:8000/v1
+```
+
+Model:
+
+```text
+atlas-grounded
+```
+
+Keep the Atlas API private. Do not expose port `8000` through Cloudflare.
 
 ## Run API Tests
 
@@ -142,6 +170,14 @@ python -m pytest
 ```
 
 ## Release Notes
+
+### Atlas API v0.6.0
+
+- Added `GET /v1/models`.
+- Added `POST /v1/chat/completions`.
+- Added OpenAI-compatible response shape for Open WebUI.
+- Added `atlas-grounded` model alias routed through Atlas grounded chat.
+- Kept Atlas API private to the services VLAN.
 
 ### Atlas API v0.5.0
 

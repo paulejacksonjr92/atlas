@@ -15,6 +15,7 @@ from app.settings import (
     DOCUMENT_COLLECTION,
     MEMORY_COLLECTION,
     OLLAMA_BASE_URL,
+    OPENAI_COMPAT_MODEL,
     OPENWEBUI_BASE_URL,
     QDRANT_BASE_URL,
     REDIS_HOST,
@@ -35,6 +36,19 @@ class GroundedChatRequest(BaseModel):
     model: str | None = None
     retrieval_limit: int = Field(default=4, ge=1, le=10)
     min_score: float = Field(default=0.2, ge=0.0, le=1.0)
+
+
+class OpenAIChatMessage(BaseModel):
+    role: str
+    content: str | None = ""
+
+
+class OpenAIChatCompletionRequest(BaseModel):
+    model: str = OPENAI_COMPAT_MODEL
+    messages: list[OpenAIChatMessage] = Field(..., min_length=1)
+    stream: bool = False
+    temperature: float | None = None
+    max_tokens: int | None = None
 
 
 class EmbeddingRequest(BaseModel):
@@ -75,6 +89,10 @@ def with_metadata(payload: dict) -> dict:
         "created_at": utc_now(),
         **payload,
     }
+
+
+def unix_timestamp() -> int:
+    return int(datetime.now(timezone.utc).timestamp())
 
 
 def error_response(status_code: int, code: str, message: str, details=None) -> JSONResponse:
@@ -338,6 +356,41 @@ Question:
 Answer:"""
 
 
+def latest_user_message(messages: list[OpenAIChatMessage]) -> str:
+    for message in reversed(messages):
+        if message.role == "user" and message.content:
+            return message.content
+    for message in reversed(messages):
+        if message.content:
+            return message.content
+    return ""
+
+
+def openai_chat_response(model: str, content: str) -> dict:
+    completion_id = f"chatcmpl-{request_id()}"
+    return {
+        "id": completion_id,
+        "object": "chat.completion",
+        "created": unix_timestamp(),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": content,
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        },
+    }
+
+
 @app.get("/")
 def root():
     return with_metadata(
@@ -353,6 +406,8 @@ def root():
                 "/models",
                 "/chat",
                 "/chat/grounded",
+                "/v1/models",
+                "/v1/chat/completions",
                 "/embeddings",
                 "/memory",
                 "/memory/search",
@@ -407,6 +462,58 @@ async def status():
             "services": services,
         }
     )
+
+
+@app.get("/v1/models")
+def openai_models():
+    created = unix_timestamp()
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": OPENAI_COMPAT_MODEL,
+                "object": "model",
+                "created": created,
+                "owned_by": SERVICE_NAME,
+            }
+        ],
+    }
+
+
+@app.post("/v1/chat/completions")
+async def openai_chat_completions(request: OpenAIChatCompletionRequest):
+    if request.stream:
+        return error_response(
+            status_code=400,
+            code="streaming_not_supported",
+            message="Streaming chat completions are not supported yet.",
+            details={"model": request.model},
+        )
+
+    prompt = latest_user_message(request.messages)
+    if not prompt:
+        return error_response(
+            status_code=422,
+            code="missing_prompt",
+            message="No user message content was provided.",
+            details=None,
+        )
+
+    if request.model == OPENAI_COMPAT_MODEL:
+        embedding_model, sources = await retrieve_context(prompt, limit=4, min_score=0.2)
+        grounded_prompt = build_grounded_prompt(prompt, sources)
+        model, data = await generate_text(grounded_prompt, DEFAULT_MODEL)
+        content = data.get("response", "")
+        if sources:
+            source_lines = []
+            for index, source in enumerate(sources, start=1):
+                label = source.get("title") or source.get("source") or source.get("type")
+                source_lines.append(f"[{index}] {label}")
+            content = f"{content}\n\nSources:\n" + "\n".join(source_lines)
+        return openai_chat_response(request.model, content)
+
+    model, data = await generate_text(prompt, request.model)
+    return openai_chat_response(model, data.get("response", ""))
 
 
 @app.get("/models")

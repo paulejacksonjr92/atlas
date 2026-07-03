@@ -1,7 +1,8 @@
 import os
 
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.6.0"
 SERVICE_NAME = "atlas-api"
+OPENAI_COMPAT_MODEL = "atlas-grounded"
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://atlas-ollama:11434")
 QDRANT_BASE_URL = os.getenv("QDRANT_BASE_URL", "http://atlas-qdrant:6333")
