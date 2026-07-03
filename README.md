@@ -10,32 +10,55 @@ Current API version: `0.3.0`
 
 ```text
 C:\Atlas
-├── api
-│   ├── app
-│   │   ├── __init__.py
-│   │   └── main.py
-│   ├── tests
-│   │   └── test_api.py
-│   ├── Dockerfile
-│   └── requirements.txt
-├── compose
-│   └── docker-compose.yml
-├── data
-├── logs
-└── backups
++-- api
+|   +-- app
+|   |   +-- __init__.py
+|   |   +-- main.py
+|   |   +-- settings.py
+|   +-- tests
+|   |   +-- test_api.py
+|   +-- Dockerfile
+|   +-- requirements.txt
++-- compose
+|   +-- docker-compose.yml
++-- data
++-- logs
++-- backups
 ```
 
 The `data`, `logs`, and `backups` folders are runtime state and are intentionally ignored by Git.
 
 ## Services
 
-| Service | URL |
+| Service | Local URL |
 | --- | --- |
 | Atlas API | <http://localhost:8000> |
 | Open WebUI | <http://localhost:3000> |
 | Ollama | <http://localhost:11434> |
 | Qdrant | <http://localhost:6333> |
 | Redis | `localhost:6379` |
+
+## Network Placement
+
+Atlas runs on the isolated services VLAN with Jonas and the NAS.
+
+Static Atlas host IP:
+
+```text
+10.87.40.69
+```
+
+Internal service URLs:
+
+| Service | VLAN URL |
+| --- | --- |
+| Atlas API | <http://10.87.40.69:8000> |
+| Open WebUI | <http://10.87.40.69:3000> |
+| Ollama | <http://10.87.40.69:11434> |
+| Qdrant | <http://10.87.40.69:6333> |
+| Redis | `10.87.40.69:6379` |
+
+Do not expose Atlas directly to the internet. Use VLAN firewall rules, VPN, or an authenticated reverse proxy for access from outside the services network.
 
 ## API Endpoints
 
