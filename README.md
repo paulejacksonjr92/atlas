@@ -4,7 +4,7 @@ Atlas is a local, Docker-first AI platform built around Ollama, Open WebUI, Qdra
 
 ## Version
 
-Current API version: `0.3.0`
+Current API version: `0.4.0`
 
 ## Project Layout
 
@@ -73,6 +73,8 @@ Do not expose Atlas directly to the internet. Use VLAN firewall rules, VPN, or a
 | `POST /embeddings` | Create an embedding for text |
 | `POST /memory` | Store text in Atlas memory |
 | `GET /memory/search` | Search Atlas memory |
+| `POST /documents` | Ingest a text document into Atlas memory |
+| `GET /documents/search` | Search ingested document chunks |
 
 All successful API responses include:
 
@@ -121,6 +123,8 @@ curl -Method POST http://localhost:8000/chat -ContentType "application/json" -Bo
 curl -Method POST http://localhost:8000/embeddings -ContentType "application/json" -Body '{"text":"Apple TVs are assigned to VLAN 40."}'
 curl -Method POST http://localhost:8000/memory -ContentType "application/json" -Body '{"text":"Apple TVs are assigned to VLAN 40.","source":"manual-note","metadata":{"client":"Los Padrinos"}}'
 curl "http://localhost:8000/memory/search?query=apple%20tv%20vlan&limit=3"
+curl -Method POST http://localhost:8000/documents -ContentType "application/json" -Body '{"title":"Los Padrinos Network Notes","text":"Apple TVs are assigned to VLAN 40. The MDF switch is a Cisco Catalyst.","source":"manual-document","metadata":{"client":"Los Padrinos"}}'
+curl "http://localhost:8000/documents/search?query=apple%20tv%20vlan&limit=3"
 ```
 
 Atlas uses `llama3.1:8b` for chat and `nomic-embed-text` for embeddings by default.
@@ -136,6 +140,14 @@ python -m pytest
 ```
 
 ## Release Notes
+
+### Atlas API v0.4.0
+
+- Added `POST /documents` for text document ingestion.
+- Added text chunking with chunk metadata.
+- Added Qdrant-backed `GET /documents/search`.
+- Added a separate `atlas_documents` collection.
+- Expanded API tests for document ingestion and retrieval.
 
 ### Atlas API v0.3.0
 

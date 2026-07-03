@@ -33,7 +33,7 @@ class FakeAsyncClient:
                 json={"models": [{"name": "llama3.1:8b"}]},
                 request=request,
             )
-        if url.endswith("/collections/atlas_memory"):
+        if url.endswith("/collections/atlas_memory") or url.endswith("/collections/atlas_documents"):
             return httpx.Response(404, request=request)
         if url.endswith("/collections"):
             return httpx.Response(200, json={"result": {"collections": []}}, request=request)
@@ -61,6 +61,30 @@ class FakeAsyncClient:
                 request=request,
             )
         if url.endswith("/points/search"):
+            if "atlas_documents" in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "result": [
+                            {
+                                "id": "chunk-1",
+                                "score": 0.88,
+                                "payload": {
+                                    "document_id": "document-1",
+                                    "title": "Los Padrinos Network Notes",
+                                    "text": "Apple TVs are assigned to VLAN 40.",
+                                    "source": "manual-document",
+                                    "metadata": {"client": "Los Padrinos"},
+                                    "chunk_index": 0,
+                                    "chunk_count": 1,
+                                    "created_at": "2026-07-03T00:00:00+00:00",
+                                    "embedding_model": "nomic-embed-text",
+                                },
+                            }
+                        ]
+                    },
+                    request=request,
+                )
             return httpx.Response(
                 200,
                 json={
@@ -83,18 +107,20 @@ class FakeAsyncClient:
         return httpx.Response(404, request=request)
 
 
-def test_root_includes_v3_endpoints():
+def test_root_includes_v4_endpoints():
     response = client.get("/")
 
     assert response.status_code == 200
     payload = response.json()
     assert_metadata(payload)
     assert payload["service"] == "atlas-api"
-    assert payload["version"] == "0.3.0"
+    assert payload["version"] == "0.4.0"
     assert "/version" in payload["endpoints"]
     assert "/status" in payload["endpoints"]
     assert "/embeddings" in payload["endpoints"]
     assert "/memory/search" in payload["endpoints"]
+    assert "/documents" in payload["endpoints"]
+    assert "/documents/search" in payload["endpoints"]
 
 
 def test_version():
@@ -104,7 +130,7 @@ def test_version():
     payload = response.json()
     assert_metadata(payload)
     assert payload["service"] == "atlas-api"
-    assert payload["version"] == "0.3.0"
+    assert payload["version"] == "0.4.0"
 
 
 def test_health_includes_memory_config():
@@ -115,6 +141,7 @@ def test_health_includes_memory_config():
     assert_metadata(payload)
     assert payload["qdrant_base_url"] == "http://atlas-qdrant:6333"
     assert payload["memory_collection"] == "atlas_memory"
+    assert payload["document_collection"] == "atlas_documents"
 
 
 def test_validation_error_is_structured():
@@ -206,6 +233,61 @@ def test_search_memory(monkeypatch):
             "text": "Apple TVs are on VLAN 40.",
             "source": "recon",
             "metadata": {"client": "Los Padrinos"},
+            "created_at": "2026-07-03T00:00:00+00:00",
+            "embedding_model": "nomic-embed-text",
+        }
+    ]
+
+
+def test_ingest_document(monkeypatch):
+    FakeAsyncClient.requests = []
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    response = client.post(
+        "/documents",
+        json={
+            "title": "Los Padrinos Network Notes",
+            "text": "Apple TVs are assigned to VLAN 40. The MDF switch is a Cisco Catalyst.",
+            "source": "manual-document",
+            "metadata": {"client": "Los Padrinos"},
+            "chunk_size": 200,
+            "chunk_overlap": 0,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert_metadata(payload)
+    assert payload["title"] == "Los Padrinos Network Notes"
+    assert payload["collection"] == "atlas_documents"
+    assert payload["embedding_model"] == "nomic-embed-text"
+    assert payload["chunk_count"] == 1
+    assert payload["stored"] is True
+    assert any(request[0] == "PUT" and request[1].endswith("/collections/atlas_documents") for request in FakeAsyncClient.requests)
+    assert any(request[0] == "PUT" and request[1].endswith("/points") for request in FakeAsyncClient.requests)
+
+
+def test_search_documents(monkeypatch):
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    response = client.get("/documents/search", params={"query": "apple tv vlan"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert_metadata(payload)
+    assert payload["query"] == "apple tv vlan"
+    assert payload["collection"] == "atlas_documents"
+    assert payload["results"] == [
+        {
+            "document_id": "document-1",
+            "chunk_id": "chunk-1",
+            "score": 0.88,
+            "title": "Los Padrinos Network Notes",
+            "text": "Apple TVs are assigned to VLAN 40.",
+            "source": "manual-document",
+            "metadata": {"client": "Los Padrinos"},
+            "chunk_index": 0,
+            "chunk_count": 1,
             "created_at": "2026-07-03T00:00:00+00:00",
             "embedding_model": "nomic-embed-text",
         }

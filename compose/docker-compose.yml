@@ -63,6 +63,7 @@
       DEFAULT_MODEL: llama3.1:8b
       DEFAULT_EMBEDDING_MODEL: nomic-embed-text
       MEMORY_COLLECTION: atlas_memory
+      DOCUMENT_COLLECTION: atlas_documents
     depends_on:
       - atlas-ollama
       - atlas-qdrant

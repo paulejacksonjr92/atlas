@@ -12,6 +12,7 @@ from app.settings import (
     APP_VERSION,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_MODEL,
+    DOCUMENT_COLLECTION,
     MEMORY_COLLECTION,
     OLLAMA_BASE_URL,
     OPENWEBUI_BASE_URL,
@@ -40,6 +41,17 @@ class MemoryWriteRequest(BaseModel):
     metadata: dict = Field(default_factory=dict)
     collection: str | None = None
     model: str | None = None
+
+
+class DocumentIngestRequest(BaseModel):
+    title: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1)
+    source: str | None = None
+    metadata: dict = Field(default_factory=dict)
+    collection: str | None = None
+    model: str | None = None
+    chunk_size: int = Field(default=1200, ge=200, le=4000)
+    chunk_overlap: int = Field(default=150, ge=0, le=1000)
 
 
 def utc_now() -> str:
@@ -110,6 +122,30 @@ def parse_embedding(data: dict) -> list[float]:
     if "embeddings" in data and data["embeddings"]:
         return data["embeddings"][0]
     return []
+
+
+def chunk_text(text: str, chunk_size: int = 1200, chunk_overlap: int = 150) -> list[str]:
+    clean_text = " ".join(text.split())
+    if not clean_text:
+        return []
+    if chunk_overlap >= chunk_size:
+        chunk_overlap = max(0, chunk_size // 5)
+
+    chunks = []
+    start = 0
+    while start < len(clean_text):
+        end = min(start + chunk_size, len(clean_text))
+        if end < len(clean_text):
+            boundary = clean_text.rfind(" ", start, end)
+            if boundary > start:
+                end = boundary
+        chunk = clean_text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        if end >= len(clean_text):
+            break
+        start = max(0, end - chunk_overlap)
+    return chunks
 
 
 async def create_embedding(text: str, model: str | None = None) -> tuple[str, list[float]]:
@@ -201,6 +237,8 @@ def root():
                 "/embeddings",
                 "/memory",
                 "/memory/search",
+                "/documents",
+                "/documents/search",
             ],
         }
     )
@@ -218,6 +256,7 @@ def health():
             "default_model": DEFAULT_MODEL,
             "default_embedding_model": DEFAULT_EMBEDDING_MODEL,
             "memory_collection": MEMORY_COLLECTION,
+            "document_collection": DOCUMENT_COLLECTION,
         }
     )
 
@@ -387,6 +426,118 @@ async def search_memory(
         {
             "query": query,
             "collection": memory_collection,
+            "embedding_model": embedding_model,
+            "results": results,
+        }
+    )
+
+
+@app.post("/documents")
+async def ingest_document(request: DocumentIngestRequest):
+    collection = request.collection or DOCUMENT_COLLECTION
+    document_id = request_id()
+    ingested_at = utc_now()
+    chunks = chunk_text(request.text, request.chunk_size, request.chunk_overlap)
+    if not chunks:
+        return error_response(
+            status_code=422,
+            code="empty_document",
+            message="Document text did not contain ingestible content.",
+            details=None,
+        )
+
+    points = []
+    embedding_model = request.model or DEFAULT_EMBEDDING_MODEL
+    vector_size = None
+
+    for index, chunk in enumerate(chunks):
+        embedding_model, embedding = await create_embedding(chunk, request.model)
+        vector_size = len(embedding)
+        points.append(
+            {
+                "id": request_id(),
+                "vector": embedding,
+                "payload": {
+                    "document_id": document_id,
+                    "title": request.title,
+                    "text": chunk,
+                    "source": request.source,
+                    "metadata": request.metadata,
+                    "chunk_index": index,
+                    "chunk_count": len(chunks),
+                    "created_at": ingested_at,
+                    "embedding_model": embedding_model,
+                },
+            }
+        )
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        await ensure_memory_collection(client, collection, vector_size or 0)
+        response = await client.put(
+            f"{QDRANT_BASE_URL}/collections/{collection}/points",
+            params={"wait": "true"},
+            json={"points": points},
+        )
+        response.raise_for_status()
+
+    return with_metadata(
+        {
+            "document_id": document_id,
+            "title": request.title,
+            "collection": collection,
+            "source": request.source,
+            "embedding_model": embedding_model,
+            "chunk_count": len(chunks),
+            "stored": True,
+        }
+    )
+
+
+@app.get("/documents/search")
+async def search_documents(
+    query: str = Query(..., min_length=1),
+    limit: int = Query(5, ge=1, le=25),
+    collection: str | None = None,
+    model: str | None = None,
+):
+    document_collection = collection or DOCUMENT_COLLECTION
+    embedding_model, embedding = await create_embedding(query, model)
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{QDRANT_BASE_URL}/collections/{document_collection}/points/search",
+            json={
+                "vector": embedding,
+                "limit": limit,
+                "with_payload": True,
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    results = []
+    for item in data.get("result", []):
+        payload = item.get("payload", {})
+        results.append(
+            {
+                "document_id": payload.get("document_id"),
+                "chunk_id": item.get("id"),
+                "score": item.get("score"),
+                "title": payload.get("title"),
+                "text": payload.get("text"),
+                "source": payload.get("source"),
+                "metadata": payload.get("metadata", {}),
+                "chunk_index": payload.get("chunk_index"),
+                "chunk_count": payload.get("chunk_count"),
+                "created_at": payload.get("created_at"),
+                "embedding_model": payload.get("embedding_model"),
+            }
+        )
+
+    return with_metadata(
+        {
+            "query": query,
+            "collection": document_collection,
             "embedding_model": embedding_model,
             "results": results,
         }
