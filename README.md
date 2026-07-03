@@ -4,7 +4,7 @@ Atlas is a local, Docker-first AI platform built around Ollama, Open WebUI, Qdra
 
 ## Version
 
-Current API version: `0.6.0`
+Current API version: `0.6.1`
 
 ## Project Layout
 
@@ -178,6 +178,11 @@ python -m pytest
 - Added OpenAI-compatible response shape for Open WebUI.
 - Added `atlas-grounded` model alias routed through Atlas grounded chat.
 - Kept Atlas API private to the services VLAN.
+
+### Atlas API v0.6.1
+
+- Added OpenAI-compatible streaming responses for Open WebUI.
+- `stream: true` now returns Server-Sent Events and ends with `[DONE]`.
 
 ### Atlas API v0.5.0
 

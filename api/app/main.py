@@ -1,11 +1,12 @@
 import asyncio
+import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
 import httpx
 from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.settings import (
@@ -391,6 +392,47 @@ def openai_chat_response(model: str, content: str) -> dict:
     }
 
 
+def openai_chat_stream(model: str, content: str) -> StreamingResponse:
+    completion_id = f"chatcmpl-{request_id()}"
+    created = unix_timestamp()
+
+    async def events():
+        chunk = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "content": content,
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        }
+        done = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+        yield f"data: {json.dumps(chunk)}\n\n"
+        yield f"data: {json.dumps(done)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream")
+
+
 @app.get("/")
 def root():
     return with_metadata(
@@ -482,14 +524,6 @@ def openai_models():
 
 @app.post("/v1/chat/completions")
 async def openai_chat_completions(request: OpenAIChatCompletionRequest):
-    if request.stream:
-        return error_response(
-            status_code=400,
-            code="streaming_not_supported",
-            message="Streaming chat completions are not supported yet.",
-            details={"model": request.model},
-        )
-
     prompt = latest_user_message(request.messages)
     if not prompt:
         return error_response(
@@ -510,10 +544,15 @@ async def openai_chat_completions(request: OpenAIChatCompletionRequest):
                 label = source.get("title") or source.get("source") or source.get("type")
                 source_lines.append(f"[{index}] {label}")
             content = f"{content}\n\nSources:\n" + "\n".join(source_lines)
+        if request.stream:
+            return openai_chat_stream(request.model, content)
         return openai_chat_response(request.model, content)
 
     model, data = await generate_text(prompt, request.model)
-    return openai_chat_response(model, data.get("response", ""))
+    content = data.get("response", "")
+    if request.stream:
+        return openai_chat_stream(model, content)
+    return openai_chat_response(model, content)
 
 
 @app.get("/models")

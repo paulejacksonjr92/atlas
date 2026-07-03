@@ -114,7 +114,7 @@ def test_root_includes_v5_endpoints():
     payload = response.json()
     assert_metadata(payload)
     assert payload["service"] == "atlas-api"
-    assert payload["version"] == "0.6.0"
+    assert payload["version"] == "0.6.1"
     assert "/version" in payload["endpoints"]
     assert "/status" in payload["endpoints"]
     assert "/embeddings" in payload["endpoints"]
@@ -133,7 +133,7 @@ def test_version():
     payload = response.json()
     assert_metadata(payload)
     assert payload["service"] == "atlas-api"
-    assert payload["version"] == "0.6.0"
+    assert payload["version"] == "0.6.1"
 
 
 def test_health_includes_memory_config():
@@ -237,19 +237,24 @@ def test_openai_chat_completions_atlas_grounded(monkeypatch):
     assert "Sources:" in content
 
 
-def test_openai_chat_completions_rejects_stream():
+def test_openai_chat_completions_stream(monkeypatch):
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
     response = client.post(
         "/v1/chat/completions",
         json={
             "model": "atlas-grounded",
             "stream": True,
-            "messages": [{"role": "user", "content": "hello"}],
+            "messages": [{"role": "user", "content": "Which VLAN are the Apple TVs assigned?"}],
         },
     )
 
-    assert response.status_code == 400
-    payload = response.json()
-    assert payload["error"]["code"] == "streaming_not_supported"
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    body = response.text
+    assert "chat.completion.chunk" in body
+    assert "Apple TVs are assigned to VLAN 40 [1]." in body
+    assert "data: [DONE]" in body
 
 
 def test_openai_chat_completions_model_passthrough(monkeypatch):
