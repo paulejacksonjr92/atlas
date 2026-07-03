@@ -30,6 +30,13 @@ class ChatRequest(BaseModel):
     model: str | None = None
 
 
+class GroundedChatRequest(BaseModel):
+    prompt: str = Field(..., min_length=1)
+    model: str | None = None
+    retrieval_limit: int = Field(default=4, ge=1, le=10)
+    min_score: float = Field(default=0.2, ge=0.0, le=1.0)
+
+
 class EmbeddingRequest(BaseModel):
     text: str = Field(..., min_length=1)
     model: str | None = None
@@ -165,6 +172,24 @@ async def create_embedding(text: str, model: str | None = None) -> tuple[str, li
     return embedding_model, parse_embedding(data)
 
 
+async def generate_text(prompt: str, model: str | None = None) -> tuple[str, dict]:
+    generation_model = model or DEFAULT_MODEL
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={
+                "model": generation_model,
+                "prompt": prompt,
+                "stream": False,
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    return generation_model, data
+
+
 async def ensure_memory_collection(client: httpx.AsyncClient, collection: str, vector_size: int):
     response = await client.get(f"{QDRANT_BASE_URL}/collections/{collection}")
     if response.status_code == 200:
@@ -220,6 +245,99 @@ async def check_redis() -> dict:
         }
 
 
+async def search_collection(collection: str, query: str, limit: int, model: str | None = None) -> tuple[str, list[dict]]:
+    embedding_model, embedding = await create_embedding(query, model)
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{QDRANT_BASE_URL}/collections/{collection}/points/search",
+            json={
+                "vector": embedding,
+                "limit": limit,
+                "with_payload": True,
+            },
+        )
+        if response.status_code == 404:
+            return embedding_model, []
+        response.raise_for_status()
+        data = response.json()
+
+    return embedding_model, data.get("result", [])
+
+
+def memory_source(item: dict) -> dict:
+    payload = item.get("payload", {})
+    return {
+        "type": "memory",
+        "id": item.get("id"),
+        "score": item.get("score"),
+        "text": payload.get("text"),
+        "source": payload.get("source"),
+        "metadata": payload.get("metadata", {}),
+        "created_at": payload.get("created_at"),
+    }
+
+
+def document_source(item: dict) -> dict:
+    payload = item.get("payload", {})
+    return {
+        "type": "document",
+        "id": item.get("id"),
+        "document_id": payload.get("document_id"),
+        "score": item.get("score"),
+        "title": payload.get("title"),
+        "text": payload.get("text"),
+        "source": payload.get("source"),
+        "metadata": payload.get("metadata", {}),
+        "chunk_index": payload.get("chunk_index"),
+        "chunk_count": payload.get("chunk_count"),
+        "created_at": payload.get("created_at"),
+    }
+
+
+async def retrieve_context(query: str, limit: int, min_score: float) -> tuple[str, list[dict]]:
+    memory_limit = max(1, limit)
+    document_limit = max(1, limit)
+    memory_result, document_result = await asyncio.gather(
+        search_collection(MEMORY_COLLECTION, query, memory_limit),
+        search_collection(DOCUMENT_COLLECTION, query, document_limit),
+    )
+
+    embedding_model = document_result[0]
+    sources = [memory_source(item) for item in memory_result[1]]
+    sources.extend(document_source(item) for item in document_result[1])
+    sources = [source for source in sources if source.get("score") is None or source["score"] >= min_score]
+    sources.sort(key=lambda source: source.get("score") or 0, reverse=True)
+    return embedding_model, sources[:limit]
+
+
+def build_grounded_prompt(question: str, sources: list[dict]) -> str:
+    if not sources:
+        context = "No relevant Atlas memory or document context was found."
+    else:
+        context_blocks = []
+        for index, source in enumerate(sources, start=1):
+            label = f"[{index}] {source['type']}"
+            if source.get("title"):
+                label += f" - {source['title']}"
+            if source.get("source"):
+                label += f" ({source['source']})"
+            context_blocks.append(f"{label}\n{source.get('text') or ''}")
+        context = "\n\n".join(context_blocks)
+
+    return f"""You are Atlas, the AI operating system for technical operations.
+Answer only from the provided Atlas context. If the context does not contain the answer, say you do not know from Atlas memory yet.
+Be concise, technical, and cite sources using bracket numbers like [1].
+
+Atlas context:
+{context}
+
+Question:
+{question}
+
+Answer:"""
+
+
 @app.get("/")
 def root():
     return with_metadata(
@@ -234,6 +352,7 @@ def root():
                 "/status",
                 "/models",
                 "/chat",
+                "/chat/grounded",
                 "/embeddings",
                 "/memory",
                 "/memory/search",
@@ -307,25 +426,36 @@ async def models():
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    model = request.model or DEFAULT_MODEL
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(
-            f"{OLLAMA_BASE_URL}/api/generate",
-            json={
-                "model": model,
-                "prompt": request.prompt,
-                "stream": False,
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
+    model, data = await generate_text(request.prompt, request.model)
 
     return with_metadata(
         {
             "model": model,
             "response": data.get("response", ""),
             "done": data.get("done", False),
+        }
+    )
+
+
+@app.post("/chat/grounded")
+async def grounded_chat(request: GroundedChatRequest):
+    embedding_model, sources = await retrieve_context(
+        request.prompt,
+        request.retrieval_limit,
+        request.min_score,
+    )
+    grounded_prompt = build_grounded_prompt(request.prompt, sources)
+    model, data = await generate_text(grounded_prompt, request.model)
+
+    return with_metadata(
+        {
+            "model": model,
+            "embedding_model": embedding_model,
+            "prompt": request.prompt,
+            "response": data.get("response", ""),
+            "done": data.get("done", False),
+            "grounded": bool(sources),
+            "sources": sources,
         }
     )
 
@@ -501,22 +631,10 @@ async def search_documents(
     model: str | None = None,
 ):
     document_collection = collection or DOCUMENT_COLLECTION
-    embedding_model, embedding = await create_embedding(query, model)
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            f"{QDRANT_BASE_URL}/collections/{document_collection}/points/search",
-            json={
-                "vector": embedding,
-                "limit": limit,
-                "with_payload": True,
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
+    embedding_model, found = await search_collection(document_collection, query, limit, model)
 
     results = []
-    for item in data.get("result", []):
+    for item in found:
         payload = item.get("payload", {})
         results.append(
             {

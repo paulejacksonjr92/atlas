@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"
 SERVICE_NAME = "atlas-api"
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://atlas-ollama:11434")

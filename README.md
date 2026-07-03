@@ -4,7 +4,7 @@ Atlas is a local, Docker-first AI platform built around Ollama, Open WebUI, Qdra
 
 ## Version
 
-Current API version: `0.4.0`
+Current API version: `0.5.0`
 
 ## Project Layout
 
@@ -70,6 +70,7 @@ Do not expose Atlas directly to the internet. Use VLAN firewall rules, VPN, or a
 | `GET /status` | Service status for Atlas dependencies |
 | `GET /models` | Available Ollama models |
 | `POST /chat` | Non-streaming Ollama generation |
+| `POST /chat/grounded` | Chat using Atlas memory and document context |
 | `POST /embeddings` | Create an embedding for text |
 | `POST /memory` | Store text in Atlas memory |
 | `GET /memory/search` | Search Atlas memory |
@@ -120,6 +121,7 @@ curl http://localhost:8000/version
 curl http://localhost:8000/status
 curl http://localhost:8000/models
 curl -Method POST http://localhost:8000/chat -ContentType "application/json" -Body '{"prompt":"Say hello in one short sentence."}'
+curl -Method POST http://localhost:8000/chat/grounded -ContentType "application/json" -Body '{"prompt":"Which VLAN are the Apple TVs assigned?","retrieval_limit":4}'
 curl -Method POST http://localhost:8000/embeddings -ContentType "application/json" -Body '{"text":"Apple TVs are assigned to VLAN 40."}'
 curl -Method POST http://localhost:8000/memory -ContentType "application/json" -Body '{"text":"Apple TVs are assigned to VLAN 40.","source":"manual-note","metadata":{"client":"Los Padrinos"}}'
 curl "http://localhost:8000/memory/search?query=apple%20tv%20vlan&limit=3"
@@ -140,6 +142,14 @@ python -m pytest
 ```
 
 ## Release Notes
+
+### Atlas API v0.5.0
+
+- Added `POST /chat/grounded`.
+- Added retrieval across manual memory and document chunks.
+- Added source-aware grounded prompts.
+- Added grounded responses with returned source references.
+- Expanded API tests for grounded chat.
 
 ### Atlas API v0.4.0
 

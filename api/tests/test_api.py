@@ -51,7 +51,7 @@ class FakeAsyncClient:
         if url.endswith("/api/generate"):
             return httpx.Response(
                 200,
-                json={"response": "hi", "done": True},
+                json={"response": "Apple TVs are assigned to VLAN 40 [1].", "done": True},
                 request=request,
             )
         if url.endswith("/api/embeddings"):
@@ -107,20 +107,21 @@ class FakeAsyncClient:
         return httpx.Response(404, request=request)
 
 
-def test_root_includes_v4_endpoints():
+def test_root_includes_v5_endpoints():
     response = client.get("/")
 
     assert response.status_code == 200
     payload = response.json()
     assert_metadata(payload)
     assert payload["service"] == "atlas-api"
-    assert payload["version"] == "0.4.0"
+    assert payload["version"] == "0.5.0"
     assert "/version" in payload["endpoints"]
     assert "/status" in payload["endpoints"]
     assert "/embeddings" in payload["endpoints"]
     assert "/memory/search" in payload["endpoints"]
     assert "/documents" in payload["endpoints"]
     assert "/documents/search" in payload["endpoints"]
+    assert "/chat/grounded" in payload["endpoints"]
 
 
 def test_version():
@@ -130,7 +131,7 @@ def test_version():
     payload = response.json()
     assert_metadata(payload)
     assert payload["service"] == "atlas-api"
-    assert payload["version"] == "0.4.0"
+    assert payload["version"] == "0.5.0"
 
 
 def test_health_includes_memory_config():
@@ -176,8 +177,29 @@ def test_chat(monkeypatch):
     payload = response.json()
     assert_metadata(payload)
     assert payload["model"] == "llama3.1:8b"
-    assert payload["response"] == "hi"
+    assert payload["response"] == "Apple TVs are assigned to VLAN 40 [1]."
     assert payload["done"] is True
+
+
+def test_grounded_chat(monkeypatch):
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    response = client.post(
+        "/chat/grounded",
+        json={"prompt": "Which VLAN are the Apple TVs assigned?", "retrieval_limit": 3},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert_metadata(payload)
+    assert payload["model"] == "llama3.1:8b"
+    assert payload["embedding_model"] == "nomic-embed-text"
+    assert payload["prompt"] == "Which VLAN are the Apple TVs assigned?"
+    assert payload["response"] == "Apple TVs are assigned to VLAN 40 [1]."
+    assert payload["done"] is True
+    assert payload["grounded"] is True
+    assert payload["sources"][0]["score"] >= payload["sources"][1]["score"]
+    assert {source["type"] for source in payload["sources"]} == {"memory", "document"}
 
 
 def test_embeddings(monkeypatch):
