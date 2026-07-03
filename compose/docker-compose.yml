@@ -56,9 +56,17 @@
       - "8000:8000"
     environment:
       OLLAMA_BASE_URL: http://atlas-ollama:11434
+      QDRANT_BASE_URL: http://atlas-qdrant:6333
+      OPENWEBUI_BASE_URL: http://atlas-openwebui:8080
+      REDIS_HOST: atlas-redis
+      REDIS_PORT: 6379
       DEFAULT_MODEL: llama3.1:8b
+      DEFAULT_EMBEDDING_MODEL: nomic-embed-text
+      MEMORY_COLLECTION: atlas_memory
     depends_on:
       - atlas-ollama
+      - atlas-qdrant
+      - atlas-redis
 
 networks:
   default:
