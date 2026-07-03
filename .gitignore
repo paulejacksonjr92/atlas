@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Runtime state and local data
+data/
+logs/
+backups/
+
+# Local environment
+.env
+*.local
+
+# Docker/runtime noise
+*.log

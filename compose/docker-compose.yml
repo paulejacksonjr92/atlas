@@ -1,0 +1,65 @@
+﻿services:
+  atlas-ollama:
+    image: ollama/ollama:latest
+    container_name: atlas-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - C:/Atlas/data/ollama:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  atlas-openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: atlas-openwebui
+    restart: unless-stopped
+    ports:
+      - "3000:8080"
+    environment:
+      - OLLAMA_BASE_URL=http://atlas-ollama:11434
+    volumes:
+      - C:/Atlas/data/openwebui:/app/backend/data
+    depends_on:
+      - atlas-ollama
+
+  atlas-qdrant:
+    image: qdrant/qdrant:latest
+    container_name: atlas-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - C:/Atlas/data/qdrant:/qdrant/storage
+
+  atlas-redis:
+    image: redis:7-alpine
+    container_name: atlas-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - C:/Atlas/data/redis:/data
+    command: ["redis-server", "--appendonly", "yes"]
+
+  atlas-api:
+    build:
+      context: C:/Atlas/api
+    container_name: atlas-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      OLLAMA_BASE_URL: http://atlas-ollama:11434
+      DEFAULT_MODEL: llama3.1:8b
+    depends_on:
+      - atlas-ollama
+
+networks:
+  default:
+    name: atlas-network
