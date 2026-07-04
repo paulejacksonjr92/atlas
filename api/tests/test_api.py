@@ -104,6 +104,51 @@ class FakeAsyncClient:
                 },
                 request=request,
             )
+        if url.endswith("/points/scroll"):
+            return httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "points": [
+                            {
+                                "id": "chunk-1",
+                                "payload": {
+                                    "document_id": "document-1",
+                                    "title": "PatchCraft Sanitized Overview",
+                                    "source": "sanitized-summary",
+                                    "metadata": {
+                                        "project": "PatchCraft",
+                                        "safety": "sanitized",
+                                        "type": "overview",
+                                    },
+                                    "chunk_index": 0,
+                                    "chunk_count": 2,
+                                    "created_at": "2026-07-03T00:00:00+00:00",
+                                    "embedding_model": "nomic-embed-text",
+                                },
+                            },
+                            {
+                                "id": "chunk-2",
+                                "payload": {
+                                    "document_id": "document-1",
+                                    "title": "PatchCraft Sanitized Overview",
+                                    "source": "sanitized-summary",
+                                    "metadata": {
+                                        "project": "PatchCraft",
+                                        "safety": "sanitized",
+                                        "type": "overview",
+                                    },
+                                    "chunk_index": 1,
+                                    "chunk_count": 2,
+                                    "created_at": "2026-07-03T00:00:00+00:00",
+                                    "embedding_model": "nomic-embed-text",
+                                },
+                            },
+                        ]
+                    }
+                },
+                request=request,
+            )
         return httpx.Response(404, request=request)
 
 
@@ -114,7 +159,7 @@ def test_root_includes_v5_endpoints():
     payload = response.json()
     assert_metadata(payload)
     assert payload["service"] == "atlas-api"
-    assert payload["version"] == "0.6.1"
+    assert payload["version"] == "0.7.0"
     assert "/version" in payload["endpoints"]
     assert "/status" in payload["endpoints"]
     assert "/embeddings" in payload["endpoints"]
@@ -124,6 +169,8 @@ def test_root_includes_v5_endpoints():
     assert "/chat/grounded" in payload["endpoints"]
     assert "/v1/models" in payload["endpoints"]
     assert "/v1/chat/completions" in payload["endpoints"]
+    assert "/knowledge/policy" in payload["endpoints"]
+    assert "/knowledge/sources" in payload["endpoints"]
 
 
 def test_version():
@@ -133,7 +180,44 @@ def test_version():
     payload = response.json()
     assert_metadata(payload)
     assert payload["service"] == "atlas-api"
-    assert payload["version"] == "0.6.1"
+    assert payload["version"] == "0.7.0"
+
+
+def test_knowledge_policy():
+    response = client.get("/knowledge/policy")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert_metadata(payload)
+    assert ".env and local environment files" in payload["blocked"]
+    assert "passwords, tokens, API keys, and raw secrets" in payload["blocked"]
+    assert payload["required_metadata"]["project"].startswith("Owning system")
+
+
+def test_knowledge_sources(monkeypatch):
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    response = client.get("/knowledge/sources")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert_metadata(payload)
+    assert payload["collection"] == "atlas_documents"
+    assert payload["source_count"] == 1
+    assert payload["sources"] == [
+        {
+            "document_id": "document-1",
+            "title": "PatchCraft Sanitized Overview",
+            "source": "sanitized-summary",
+            "project": "PatchCraft",
+            "safety": "sanitized",
+            "type": "overview",
+            "chunk_count": 2,
+            "created_at": "2026-07-03T00:00:00+00:00",
+            "embedding_model": "nomic-embed-text",
+            "chunks_seen": 2,
+        }
+    ]
 
 
 def test_health_includes_memory_config():
@@ -359,6 +443,26 @@ def test_ingest_document(monkeypatch):
     assert payload["stored"] is True
     assert any(request[0] == "PUT" and request[1].endswith("/collections/atlas_documents") for request in FakeAsyncClient.requests)
     assert any(request[0] == "PUT" and request[1].endswith("/points") for request in FakeAsyncClient.requests)
+
+
+def test_ingest_document_blocks_env_source(monkeypatch):
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    response = client.post(
+        "/documents",
+        json={
+            "title": "StudioServices .env",
+            "text": "SMTP_HOST=example.invalid",
+            "source": ".env",
+            "metadata": {"project": "StudioServices", "safety": "unsafe"},
+        },
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert_metadata(payload)
+    assert payload["error"]["code"] == "knowledge_policy_violation"
+    assert payload["error"]["details"]["policy_endpoint"] == "/knowledge/policy"
 
 
 def test_search_documents(monkeypatch):

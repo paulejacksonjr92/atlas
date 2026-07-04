@@ -4,7 +4,7 @@ Atlas is a local, Docker-first AI platform built around Ollama, Open WebUI, Qdra
 
 ## Version
 
-Current API version: `0.6.1`
+Current API version: `0.7.0`
 
 ## Project Layout
 
@@ -78,6 +78,8 @@ Do not expose Atlas directly to the internet. Use VLAN firewall rules, VPN, or a
 | `GET /memory/search` | Search Atlas memory |
 | `POST /documents` | Ingest a text document into Atlas memory |
 | `GET /documents/search` | Search ingested document chunks |
+| `GET /knowledge/policy` | Show Atlas knowledge ingestion boundaries |
+| `GET /knowledge/sources` | List registered document sources Atlas knows about |
 
 All successful API responses include:
 
@@ -131,6 +133,8 @@ curl -Method POST http://localhost:8000/memory -ContentType "application/json" -
 curl "http://localhost:8000/memory/search?query=apple%20tv%20vlan&limit=3"
 curl -Method POST http://localhost:8000/documents -ContentType "application/json" -Body '{"title":"Los Padrinos Network Notes","text":"Apple TVs are assigned to VLAN 40. The MDF switch is a Cisco Catalyst.","source":"manual-document","metadata":{"client":"Los Padrinos"}}'
 curl "http://localhost:8000/documents/search?query=apple%20tv%20vlan&limit=3"
+curl http://localhost:8000/knowledge/policy
+curl http://localhost:8000/knowledge/sources
 ```
 
 Atlas uses `llama3.1:8b` for chat and `nomic-embed-text` for embeddings by default.
@@ -170,6 +174,13 @@ python -m pytest
 ```
 
 ## Release Notes
+
+### Atlas API v0.7.0
+
+- Added `GET /knowledge/policy` for explicit Atlas ingestion boundaries.
+- Added `GET /knowledge/sources` to list registered document sources.
+- Added document ingestion blocking for unsafe sources such as `.env`, logs, backups, database dumps, raw secrets, and unsafe metadata.
+- Documented that Atlas stores orientation and policy context, not app-owned source-of-truth data.
 
 ### Atlas API v0.6.0
 

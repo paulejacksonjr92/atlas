@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "0.6.1"
+APP_VERSION = "0.7.0"
 SERVICE_NAME = "atlas-api"
 OPENAI_COMPAT_MODEL = "atlas-grounded"
 

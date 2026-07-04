@@ -76,6 +76,64 @@ class DocumentIngestRequest(BaseModel):
     chunk_overlap: int = Field(default=150, ge=0, le=1000)
 
 
+UNSAFE_SOURCE_PATTERNS = [
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.development",
+    "secret",
+    "secrets",
+    "password",
+    "token",
+    "credential",
+    "credentials",
+    "backup",
+    "backups",
+    "log",
+    "logs",
+    ".sql",
+    ".sqlite",
+    ".db",
+    ".dump",
+]
+
+UNSAFE_TEXT_PATTERNS = [
+    "api_key",
+    "apikey",
+    "secret_key",
+    "access_token",
+    "refresh_token",
+    "private_key",
+    "smtp_password",
+    "postgres_password",
+    "database_url",
+    "session_token",
+]
+
+KNOWLEDGE_POLICY = {
+    "allowed": [
+        "sanitized overviews",
+        "reviewed architecture notes",
+        "reviewed domain models",
+        "boundary and ownership policies",
+        "non-sensitive operational runbooks",
+    ],
+    "blocked": [
+        ".env and local environment files",
+        "passwords, tokens, API keys, and raw secrets",
+        "database dumps and app databases",
+        "backups and logs",
+        "raw client, vendor, accounting, or production records",
+        "unreviewed files marked unsafe",
+    ],
+    "required_metadata": {
+        "project": "Owning system or app, such as Atlas, PatchCraft, or StudioServices.",
+        "safety": "Expected values include sanitized, reviewed, policy, or public.",
+        "type": "Source category, such as overview, architecture, domain-model, or policy.",
+    },
+}
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -172,6 +230,32 @@ def chunk_text(text: str, chunk_size: int = 1200, chunk_overlap: int = 150) -> l
             break
         start = max(0, end - chunk_overlap)
     return chunks
+
+
+def normalize_for_policy(value: str | None) -> str:
+    return (value or "").replace("\\", "/").lower()
+
+
+def knowledge_policy_violations(request: DocumentIngestRequest) -> list[str]:
+    violations = []
+    source = normalize_for_policy(request.source)
+    title = normalize_for_policy(request.title)
+    metadata = {str(key).lower(): value for key, value in request.metadata.items()}
+    safety = str(metadata.get("safety", "")).lower()
+
+    if safety in {"unsafe", "secret", "raw", "production-data"}:
+        violations.append(f"metadata.safety={safety} is blocked")
+
+    for pattern in UNSAFE_SOURCE_PATTERNS:
+        if pattern in source or pattern in title:
+            violations.append(f"source or title contains blocked pattern: {pattern}")
+
+    searchable_text = normalize_for_policy(request.text[:5000])
+    for pattern in UNSAFE_TEXT_PATTERNS:
+        if pattern in searchable_text:
+            violations.append(f"text contains blocked secret-shaped pattern: {pattern}")
+
+    return sorted(set(violations))
 
 
 async def create_embedding(text: str, model: str | None = None) -> tuple[str, list[float]]:
@@ -282,6 +366,62 @@ async def search_collection(collection: str, query: str, limit: int, model: str 
         data = response.json()
 
     return embedding_model, data.get("result", [])
+
+
+async def scroll_collection(collection: str, limit: int = 100) -> list[dict]:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{QDRANT_BASE_URL}/collections/{collection}/points/scroll",
+            json={
+                "limit": limit,
+                "with_payload": True,
+                "with_vector": False,
+            },
+        )
+        if response.status_code == 404:
+            return []
+        response.raise_for_status()
+        data = response.json()
+
+    result = data.get("result", {})
+    if isinstance(result, dict):
+        return result.get("points", [])
+    return result or []
+
+
+def source_registry_entry(point: dict) -> dict:
+    payload = point.get("payload", {})
+    metadata = payload.get("metadata", {}) or {}
+    return {
+        "document_id": payload.get("document_id"),
+        "title": payload.get("title"),
+        "source": payload.get("source"),
+        "project": metadata.get("project"),
+        "safety": metadata.get("safety"),
+        "type": metadata.get("type"),
+        "chunk_count": payload.get("chunk_count"),
+        "created_at": payload.get("created_at"),
+        "embedding_model": payload.get("embedding_model"),
+    }
+
+
+def summarize_sources(points: list[dict]) -> list[dict]:
+    sources = {}
+    for point in points:
+        entry = source_registry_entry(point)
+        key = entry["document_id"] or f"{entry['title']}:{entry['source']}"
+        if key not in sources:
+            sources[key] = {**entry, "chunks_seen": 0}
+        sources[key]["chunks_seen"] += 1
+        sources[key]["chunk_count"] = max(
+            sources[key].get("chunk_count") or 0,
+            entry.get("chunk_count") or 0,
+        )
+
+    return sorted(
+        sources.values(),
+        key=lambda item: (item.get("project") or "", item.get("title") or ""),
+    )
 
 
 def memory_source(item: dict) -> dict:
@@ -455,6 +595,8 @@ def root():
                 "/memory/search",
                 "/documents",
                 "/documents/search",
+                "/knowledge/policy",
+                "/knowledge/sources",
             ],
         }
     )
@@ -606,6 +748,29 @@ async def grounded_chat(request: GroundedChatRequest):
     )
 
 
+@app.get("/knowledge/policy")
+def knowledge_policy():
+    return with_metadata(KNOWLEDGE_POLICY)
+
+
+@app.get("/knowledge/sources")
+async def knowledge_sources(
+    collection: str | None = None,
+    limit: int = Query(100, ge=1, le=1000),
+):
+    document_collection = collection or DOCUMENT_COLLECTION
+    points = await scroll_collection(document_collection, limit)
+    sources = summarize_sources(points)
+
+    return with_metadata(
+        {
+            "collection": document_collection,
+            "source_count": len(sources),
+            "sources": sources,
+        }
+    )
+
+
 @app.post("/embeddings")
 async def embeddings(request: EmbeddingRequest):
     model, embedding = await create_embedding(request.text, request.model)
@@ -710,6 +875,15 @@ async def search_memory(
 
 @app.post("/documents")
 async def ingest_document(request: DocumentIngestRequest):
+    violations = knowledge_policy_violations(request)
+    if violations:
+        return error_response(
+            status_code=422,
+            code="knowledge_policy_violation",
+            message="Document was blocked by Atlas knowledge ingestion policy.",
+            details={"violations": violations, "policy_endpoint": "/knowledge/policy"},
+        )
+
     collection = request.collection or DOCUMENT_COLLECTION
     document_id = request_id()
     ingested_at = utc_now()
