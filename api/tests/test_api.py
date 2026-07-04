@@ -51,7 +51,7 @@ class FakeAsyncClient:
         if url.endswith("/api/generate"):
             return httpx.Response(
                 200,
-                json={"response": "Apple TVs are assigned to VLAN 40 [1].", "done": True},
+                json={"response": "PatchCraft is separate from Atlas [1].", "done": True},
                 request=request,
             )
         if url.endswith("/api/embeddings"):
@@ -67,14 +67,29 @@ class FakeAsyncClient:
                     json={
                         "result": [
                             {
-                                "id": "chunk-1",
+                                "id": "chunk-sanitized",
                                 "score": 0.88,
                                 "payload": {
-                                    "document_id": "document-1",
-                                    "title": "Los Padrinos Network Notes",
-                                    "text": "Apple TVs are assigned to VLAN 40.",
-                                    "source": "manual-document",
-                                    "metadata": {"client": "Los Padrinos"},
+                                    "document_id": "document-sanitized",
+                                    "title": "PatchCraft Sanitized Overview",
+                                    "text": "PatchCraft is separate from Atlas.",
+                                    "source": "sanitized-summary",
+                                    "metadata": {"project": "PatchCraft", "safety": "sanitized", "type": "overview"},
+                                    "chunk_index": 0,
+                                    "chunk_count": 1,
+                                    "created_at": "2026-07-03T00:00:00+00:00",
+                                    "embedding_model": "nomic-embed-text",
+                                },
+                            },
+                            {
+                                "id": "chunk-reviewed",
+                                "score": 0.87,
+                                "payload": {
+                                    "document_id": "document-reviewed",
+                                    "title": "PatchCraft Architecture",
+                                    "text": "PatchCraft has reviewed internal architecture details.",
+                                    "source": "docs/ARCHITECTURE.md",
+                                    "metadata": {"project": "PatchCraft", "safety": "reviewed", "type": "architecture"},
                                     "chunk_index": 0,
                                     "chunk_count": 1,
                                     "created_at": "2026-07-03T00:00:00+00:00",
@@ -93,9 +108,9 @@ class FakeAsyncClient:
                             "id": "memory-1",
                             "score": 0.91,
                             "payload": {
-                                "text": "Apple TVs are on VLAN 40.",
-                                "source": "recon",
-                                "metadata": {"client": "Los Padrinos"},
+                                "text": "Atlas may reason over sanitized PatchCraft context.",
+                                "source": "manual-note",
+                                "metadata": {"project": "PatchCraft", "safety": "sanitized", "type": "policy"},
                                 "created_at": "2026-07-03T00:00:00+00:00",
                                 "embedding_model": "nomic-embed-text",
                             },
@@ -159,7 +174,7 @@ def test_root_includes_v5_endpoints():
     payload = response.json()
     assert_metadata(payload)
     assert payload["service"] == "atlas-api"
-    assert payload["version"] == "0.7.0"
+    assert payload["version"] == "0.8.0"
     assert "/version" in payload["endpoints"]
     assert "/status" in payload["endpoints"]
     assert "/embeddings" in payload["endpoints"]
@@ -180,7 +195,7 @@ def test_version():
     payload = response.json()
     assert_metadata(payload)
     assert payload["service"] == "atlas-api"
-    assert payload["version"] == "0.7.0"
+    assert payload["version"] == "0.8.0"
 
 
 def test_knowledge_policy():
@@ -263,16 +278,16 @@ def test_chat(monkeypatch):
     payload = response.json()
     assert_metadata(payload)
     assert payload["model"] == "llama3.1:8b"
-    assert payload["response"] == "Apple TVs are assigned to VLAN 40 [1]."
+    assert payload["response"] == "PatchCraft is separate from Atlas [1]."
     assert payload["done"] is True
 
 
-def test_grounded_chat(monkeypatch):
+def test_grounded_chat_default_caller_filters_reviewed_sources(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
 
     response = client.post(
         "/chat/grounded",
-        json={"prompt": "Which VLAN are the Apple TVs assigned?", "retrieval_limit": 3},
+        json={"prompt": "What is PatchCraft?", "retrieval_limit": 3},
     )
 
     assert response.status_code == 200
@@ -280,12 +295,34 @@ def test_grounded_chat(monkeypatch):
     assert_metadata(payload)
     assert payload["model"] == "llama3.1:8b"
     assert payload["embedding_model"] == "nomic-embed-text"
-    assert payload["prompt"] == "Which VLAN are the Apple TVs assigned?"
-    assert payload["response"] == "Apple TVs are assigned to VLAN 40 [1]."
+    assert payload["prompt"] == "What is PatchCraft?"
+    assert payload["response"] == "PatchCraft is separate from Atlas [1]."
     assert payload["done"] is True
     assert payload["grounded"] is True
-    assert payload["sources"][0]["score"] >= payload["sources"][1]["score"]
-    assert {source["type"] for source in payload["sources"]} == {"memory", "document"}
+    assert payload["access"]["caller"]["role"] == "anonymous"
+    assert payload["access"]["sources_considered"] == 3
+    assert payload["access"]["sources_allowed"] == 2
+    assert payload["access"]["sources_filtered"] == 1
+    assert {source["metadata"]["safety"] for source in payload["sources"]} == {"sanitized"}
+
+
+def test_grounded_chat_internal_caller_can_use_reviewed_sources(monkeypatch):
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    response = client.post(
+        "/chat/grounded",
+        headers={"X-Atlas-User": "paul", "X-Atlas-Role": "admin", "X-Atlas-Projects": "PatchCraft"},
+        json={"prompt": "What is PatchCraft?", "retrieval_limit": 3},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["access"]["caller"]["user"] == "paul"
+    assert payload["access"]["caller"]["role"] == "admin"
+    assert payload["access"]["sources_considered"] == 3
+    assert payload["access"]["sources_allowed"] == 3
+    assert payload["access"]["sources_filtered"] == 0
+    assert {source["metadata"]["safety"] for source in payload["sources"]} == {"sanitized", "reviewed"}
 
 
 def test_openai_models():
@@ -307,7 +344,7 @@ def test_openai_chat_completions_atlas_grounded(monkeypatch):
             "model": "atlas-grounded",
             "messages": [
                 {"role": "system", "content": "You are Atlas."},
-                {"role": "user", "content": "Which VLAN are the Apple TVs assigned?"},
+                {"role": "user", "content": "What is PatchCraft?"},
             ],
         },
     )
@@ -317,8 +354,9 @@ def test_openai_chat_completions_atlas_grounded(monkeypatch):
     assert payload["object"] == "chat.completion"
     assert payload["model"] == "atlas-grounded"
     content = payload["choices"][0]["message"]["content"]
-    assert "Apple TVs are assigned to VLAN 40 [1]." in content
+    assert "PatchCraft is separate from Atlas [1]." in content
     assert "Sources:" in content
+    assert payload["atlas"]["access"]["sources_filtered"] == 1
 
 
 def test_openai_chat_completions_stream(monkeypatch):
@@ -329,7 +367,7 @@ def test_openai_chat_completions_stream(monkeypatch):
         json={
             "model": "atlas-grounded",
             "stream": True,
-            "messages": [{"role": "user", "content": "Which VLAN are the Apple TVs assigned?"}],
+            "messages": [{"role": "user", "content": "What is PatchCraft?"}],
         },
     )
 
@@ -337,7 +375,7 @@ def test_openai_chat_completions_stream(monkeypatch):
     assert response.headers["content-type"].startswith("text/event-stream")
     body = response.text
     assert "chat.completion.chunk" in body
-    assert "Apple TVs are assigned to VLAN 40 [1]." in body
+    assert "PatchCraft is separate from Atlas [1]." in body
     assert "data: [DONE]" in body
 
 
@@ -355,7 +393,7 @@ def test_openai_chat_completions_model_passthrough(monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["model"] == "llama3.1:8b"
-    assert payload["choices"][0]["message"]["content"] == "Apple TVs are assigned to VLAN 40 [1]."
+    assert payload["choices"][0]["message"]["content"] == "PatchCraft is separate from Atlas [1]."
 
 
 def test_embeddings(monkeypatch):
@@ -378,9 +416,9 @@ def test_write_memory(monkeypatch):
     response = client.post(
         "/memory",
         json={
-            "text": "Apple TVs are on VLAN 40.",
-            "source": "recon",
-            "metadata": {"client": "Los Padrinos"},
+            "text": "PatchCraft is separate from Atlas.",
+            "source": "manual-note",
+            "metadata": {"project": "PatchCraft", "safety": "sanitized"},
         },
     )
 
@@ -397,20 +435,20 @@ def test_write_memory(monkeypatch):
 def test_search_memory(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
 
-    response = client.get("/memory/search", params={"query": "apple tv vlan"})
+    response = client.get("/memory/search", params={"query": "PatchCraft Atlas"})
 
     assert response.status_code == 200
     payload = response.json()
     assert_metadata(payload)
-    assert payload["query"] == "apple tv vlan"
+    assert payload["query"] == "PatchCraft Atlas"
     assert payload["collection"] == "atlas_memory"
     assert payload["results"] == [
         {
             "memory_id": "memory-1",
             "score": 0.91,
-            "text": "Apple TVs are on VLAN 40.",
-            "source": "recon",
-            "metadata": {"client": "Los Padrinos"},
+            "text": "Atlas may reason over sanitized PatchCraft context.",
+            "source": "manual-note",
+            "metadata": {"project": "PatchCraft", "safety": "sanitized", "type": "policy"},
             "created_at": "2026-07-03T00:00:00+00:00",
             "embedding_model": "nomic-embed-text",
         }
@@ -424,10 +462,10 @@ def test_ingest_document(monkeypatch):
     response = client.post(
         "/documents",
         json={
-            "title": "Los Padrinos Network Notes",
-            "text": "Apple TVs are assigned to VLAN 40. The MDF switch is a Cisco Catalyst.",
+            "title": "PatchCraft Sanitized Overview",
+            "text": "PatchCraft is separate from Atlas. Atlas reasons over sanitized context.",
             "source": "manual-document",
-            "metadata": {"client": "Los Padrinos"},
+            "metadata": {"project": "PatchCraft", "safety": "sanitized", "type": "overview"},
             "chunk_size": 200,
             "chunk_overlap": 0,
         },
@@ -436,7 +474,7 @@ def test_ingest_document(monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert_metadata(payload)
-    assert payload["title"] == "Los Padrinos Network Notes"
+    assert payload["title"] == "PatchCraft Sanitized Overview"
     assert payload["collection"] == "atlas_documents"
     assert payload["embedding_model"] == "nomic-embed-text"
     assert payload["chunk_count"] == 1
@@ -468,22 +506,35 @@ def test_ingest_document_blocks_env_source(monkeypatch):
 def test_search_documents(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
 
-    response = client.get("/documents/search", params={"query": "apple tv vlan"})
+    response = client.get("/documents/search", params={"query": "PatchCraft Atlas"})
 
     assert response.status_code == 200
     payload = response.json()
     assert_metadata(payload)
-    assert payload["query"] == "apple tv vlan"
+    assert payload["query"] == "PatchCraft Atlas"
     assert payload["collection"] == "atlas_documents"
     assert payload["results"] == [
         {
-            "document_id": "document-1",
-            "chunk_id": "chunk-1",
+            "document_id": "document-sanitized",
+            "chunk_id": "chunk-sanitized",
             "score": 0.88,
-            "title": "Los Padrinos Network Notes",
-            "text": "Apple TVs are assigned to VLAN 40.",
-            "source": "manual-document",
-            "metadata": {"client": "Los Padrinos"},
+            "title": "PatchCraft Sanitized Overview",
+            "text": "PatchCraft is separate from Atlas.",
+            "source": "sanitized-summary",
+            "metadata": {"project": "PatchCraft", "safety": "sanitized", "type": "overview"},
+            "chunk_index": 0,
+            "chunk_count": 1,
+            "created_at": "2026-07-03T00:00:00+00:00",
+            "embedding_model": "nomic-embed-text",
+        },
+        {
+            "document_id": "document-reviewed",
+            "chunk_id": "chunk-reviewed",
+            "score": 0.87,
+            "title": "PatchCraft Architecture",
+            "text": "PatchCraft has reviewed internal architecture details.",
+            "source": "docs/ARCHITECTURE.md",
+            "metadata": {"project": "PatchCraft", "safety": "reviewed", "type": "architecture"},
             "chunk_index": 0,
             "chunk_count": 1,
             "created_at": "2026-07-03T00:00:00+00:00",

@@ -4,7 +4,7 @@ Atlas is a local, Docker-first AI platform built around Ollama, Open WebUI, Qdra
 
 ## Version
 
-Current API version: `0.7.0`
+Current API version: `0.8.0`
 
 ## Project Layout
 
@@ -126,13 +126,13 @@ curl http://localhost:8000/status
 curl http://localhost:8000/models
 curl http://localhost:8000/v1/models
 curl -Method POST http://localhost:8000/chat -ContentType "application/json" -Body '{"prompt":"Say hello in one short sentence."}'
-curl -Method POST http://localhost:8000/chat/grounded -ContentType "application/json" -Body '{"prompt":"Which VLAN are the Apple TVs assigned?","retrieval_limit":4}'
-curl -Method POST http://localhost:8000/v1/chat/completions -ContentType "application/json" -Body '{"model":"atlas-grounded","messages":[{"role":"user","content":"Which VLAN are the Apple TVs assigned?"}]}'
-curl -Method POST http://localhost:8000/embeddings -ContentType "application/json" -Body '{"text":"Apple TVs are assigned to VLAN 40."}'
-curl -Method POST http://localhost:8000/memory -ContentType "application/json" -Body '{"text":"Apple TVs are assigned to VLAN 40.","source":"manual-note","metadata":{"client":"Los Padrinos"}}'
-curl "http://localhost:8000/memory/search?query=apple%20tv%20vlan&limit=3"
-curl -Method POST http://localhost:8000/documents -ContentType "application/json" -Body '{"title":"Los Padrinos Network Notes","text":"Apple TVs are assigned to VLAN 40. The MDF switch is a Cisco Catalyst.","source":"manual-document","metadata":{"client":"Los Padrinos"}}'
-curl "http://localhost:8000/documents/search?query=apple%20tv%20vlan&limit=3"
+curl -Method POST http://localhost:8000/chat/grounded -ContentType "application/json" -Body '{"prompt":"What does PatchCraft own compared to Atlas?","retrieval_limit":4}'
+curl -Method POST http://localhost:8000/v1/chat/completions -ContentType "application/json" -Body '{"model":"atlas-grounded","messages":[{"role":"user","content":"What does PatchCraft own compared to Atlas?"}]}'
+curl -Method POST http://localhost:8000/embeddings -ContentType "application/json" -Body '{"text":"PatchCraft is separate from Atlas."}'
+curl -Method POST http://localhost:8000/memory -ContentType "application/json" -Body '{"text":"Atlas may reason over sanitized PatchCraft context.","source":"manual-note","metadata":{"project":"PatchCraft","safety":"sanitized","type":"policy"}}'
+curl "http://localhost:8000/memory/search?query=PatchCraft%20Atlas&limit=3"
+curl -Method POST http://localhost:8000/documents -ContentType "application/json" -Body '{"title":"PatchCraft Sanitized Overview","text":"PatchCraft is separate from Atlas. Atlas reasons over sanitized context.","source":"manual-document","metadata":{"project":"PatchCraft","safety":"sanitized","type":"overview"}}'
+curl "http://localhost:8000/documents/search?query=PatchCraft%20Atlas&limit=3"
 curl http://localhost:8000/knowledge/policy
 curl http://localhost:8000/knowledge/sources
 ```
@@ -163,6 +163,20 @@ atlas-grounded
 
 Keep the Atlas API private. Do not expose port `8000` through Cloudflare.
 
+## Identity-Aware Retrieval
+
+Atlas grounded chat accepts optional caller headers:
+
+```text
+X-Atlas-User: paul
+X-Atlas-Role: admin
+X-Atlas-Projects: PatchCraft,StudioServices
+```
+
+When headers are missing, Atlas uses a locked-down anonymous context. Anonymous callers can retrieve sanitized, public, or policy-level sources only. Internal roles such as `admin`, `internal`, `owner`, `operator`, `accounting`, and `tech` may retrieve reviewed internal sources, optionally scoped by `X-Atlas-Projects`.
+
+Grounded responses include an `access` summary showing caller context, sources considered, sources allowed, and sources filtered.
+
 ## Run API Tests
 
 From the API directory:
@@ -174,6 +188,15 @@ python -m pytest
 ```
 
 ## Release Notes
+
+### Atlas API v0.8.0
+
+- Added caller context parsing from `X-Atlas-User`, `X-Atlas-Role`, and `X-Atlas-Projects`.
+- Added permission-aware source filtering for grounded retrieval.
+- Anonymous callers are limited to sanitized, public, and policy-level context.
+- Internal roles can retrieve reviewed sources, optionally scoped by project.
+- Grounded responses now include source access audit metadata.
+- Removed the old incorrect network-note fixture from the API tests and README examples.
 
 ### Atlas API v0.7.0
 

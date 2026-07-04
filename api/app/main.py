@@ -76,6 +76,10 @@ class DocumentIngestRequest(BaseModel):
     chunk_overlap: int = Field(default=150, ge=0, le=1000)
 
 
+INTERNAL_ROLES = {"admin", "internal", "owner", "operator", "accounting", "tech"}
+SAFE_PUBLIC_SAFETY_VALUES = {"sanitized", "public", "policy"}
+BLOCKED_SAFETY_VALUES = {"unsafe", "secret", "raw", "production-data"}
+
 UNSAFE_SOURCE_PATTERNS = [
     ".env",
     ".env.local",
@@ -243,7 +247,7 @@ def knowledge_policy_violations(request: DocumentIngestRequest) -> list[str]:
     metadata = {str(key).lower(): value for key, value in request.metadata.items()}
     safety = str(metadata.get("safety", "")).lower()
 
-    if safety in {"unsafe", "secret", "raw", "production-data"}:
+    if safety in BLOCKED_SAFETY_VALUES:
         violations.append(f"metadata.safety={safety} is blocked")
 
     for pattern in UNSAFE_SOURCE_PATTERNS:
@@ -256,6 +260,84 @@ def knowledge_policy_violations(request: DocumentIngestRequest) -> list[str]:
             violations.append(f"text contains blocked secret-shaped pattern: {pattern}")
 
     return sorted(set(violations))
+
+
+def split_header_values(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip().lower() for item in value.split(",") if item.strip()]
+
+
+def caller_context(request: Request) -> dict:
+    role = (request.headers.get("x-atlas-role") or "anonymous").strip().lower()
+    user = (request.headers.get("x-atlas-user") or "anonymous").strip()
+    projects = split_header_values(request.headers.get("x-atlas-projects"))
+    return {
+        "user": user or "anonymous",
+        "role": role or "anonymous",
+        "projects": projects,
+        "authenticated": user.lower() != "anonymous" or role != "anonymous",
+        "internal": role in INTERNAL_ROLES,
+    }
+
+
+def source_allowed_for_caller(source: dict, caller: dict) -> tuple[bool, str]:
+    metadata = source.get("metadata", {}) or {}
+    safety = str(metadata.get("safety", "")).lower()
+    visibility = str(metadata.get("visibility", "")).lower()
+    project = str(metadata.get("project", "")).lower()
+    allowed_roles = metadata.get("allowed_roles")
+
+    if safety in BLOCKED_SAFETY_VALUES:
+        return False, "blocked_safety"
+
+    if allowed_roles:
+        if isinstance(allowed_roles, str):
+            roles = split_header_values(allowed_roles)
+        else:
+            roles = [str(role).lower() for role in allowed_roles]
+        if caller["role"] not in roles:
+            return False, "role_not_allowed"
+
+    if caller["internal"]:
+        if caller["projects"] and "*" not in caller["projects"] and project and project not in caller["projects"]:
+            return False, "project_not_allowed"
+        return True, "internal_role"
+
+    if visibility in {"public", "sanitized"} or safety in SAFE_PUBLIC_SAFETY_VALUES:
+        return True, "safe_public_context"
+
+    return False, "requires_internal_role"
+
+
+def filter_sources_for_caller(sources: list[dict], caller: dict, limit: int) -> tuple[list[dict], dict]:
+    allowed = []
+    filtered = []
+
+    for source in sources:
+        allowed_source, reason = source_allowed_for_caller(source, caller)
+        if allowed_source:
+            allowed.append(source)
+        else:
+            filtered.append(
+                {
+                    "type": source.get("type"),
+                    "title": source.get("title"),
+                    "source": source.get("source"),
+                    "project": (source.get("metadata") or {}).get("project"),
+                    "safety": (source.get("metadata") or {}).get("safety"),
+                    "reason": reason,
+                }
+            )
+
+    access = {
+        "caller": caller,
+        "sources_considered": len(sources),
+        "sources_allowed": min(len(allowed), limit),
+        "sources_filtered": len(filtered),
+        "filtered": filtered,
+    }
+    return allowed[:limit], access
 
 
 async def create_embedding(text: str, model: str | None = None) -> tuple[str, list[float]]:
@@ -454,12 +536,11 @@ def document_source(item: dict) -> dict:
     }
 
 
-async def retrieve_context(query: str, limit: int, min_score: float) -> tuple[str, list[dict]]:
-    memory_limit = max(1, limit)
-    document_limit = max(1, limit)
+async def retrieve_context(query: str, limit: int, min_score: float, caller: dict) -> tuple[str, list[dict], dict]:
+    retrieval_limit = max(1, limit * 4)
     memory_result, document_result = await asyncio.gather(
-        search_collection(MEMORY_COLLECTION, query, memory_limit),
-        search_collection(DOCUMENT_COLLECTION, query, document_limit),
+        search_collection(MEMORY_COLLECTION, query, retrieval_limit),
+        search_collection(DOCUMENT_COLLECTION, query, retrieval_limit),
     )
 
     embedding_model = document_result[0]
@@ -467,7 +548,8 @@ async def retrieve_context(query: str, limit: int, min_score: float) -> tuple[st
     sources.extend(document_source(item) for item in document_result[1])
     sources = [source for source in sources if source.get("score") is None or source["score"] >= min_score]
     sources.sort(key=lambda source: source.get("score") or 0, reverse=True)
-    return embedding_model, sources[:limit]
+    allowed_sources, access = filter_sources_for_caller(sources, caller, limit)
+    return embedding_model, allowed_sources, access
 
 
 def build_grounded_prompt(question: str, sources: list[dict]) -> str:
@@ -507,9 +589,9 @@ def latest_user_message(messages: list[OpenAIChatMessage]) -> str:
     return ""
 
 
-def openai_chat_response(model: str, content: str) -> dict:
+def openai_chat_response(model: str, content: str, atlas: dict | None = None) -> dict:
     completion_id = f"chatcmpl-{request_id()}"
-    return {
+    payload = {
         "id": completion_id,
         "object": "chat.completion",
         "created": unix_timestamp(),
@@ -530,6 +612,9 @@ def openai_chat_response(model: str, content: str) -> dict:
             "total_tokens": 0,
         },
     }
+    if atlas:
+        payload["atlas"] = atlas
+    return payload
 
 
 def openai_chat_stream(model: str, content: str) -> StreamingResponse:
@@ -665,8 +750,8 @@ def openai_models():
 
 
 @app.post("/v1/chat/completions")
-async def openai_chat_completions(request: OpenAIChatCompletionRequest):
-    prompt = latest_user_message(request.messages)
+async def openai_chat_completions(request: Request, chat_request: OpenAIChatCompletionRequest):
+    prompt = latest_user_message(chat_request.messages)
     if not prompt:
         return error_response(
             status_code=422,
@@ -675,8 +760,9 @@ async def openai_chat_completions(request: OpenAIChatCompletionRequest):
             details=None,
         )
 
-    if request.model == OPENAI_COMPAT_MODEL:
-        embedding_model, sources = await retrieve_context(prompt, limit=4, min_score=0.2)
+    if chat_request.model == OPENAI_COMPAT_MODEL:
+        caller = caller_context(request)
+        embedding_model, sources, access = await retrieve_context(prompt, limit=4, min_score=0.2, caller=caller)
         grounded_prompt = build_grounded_prompt(prompt, sources)
         model, data = await generate_text(grounded_prompt, DEFAULT_MODEL)
         content = data.get("response", "")
@@ -686,13 +772,14 @@ async def openai_chat_completions(request: OpenAIChatCompletionRequest):
                 label = source.get("title") or source.get("source") or source.get("type")
                 source_lines.append(f"[{index}] {label}")
             content = f"{content}\n\nSources:\n" + "\n".join(source_lines)
-        if request.stream:
-            return openai_chat_stream(request.model, content)
-        return openai_chat_response(request.model, content)
+        atlas = {"embedding_model": embedding_model, "access": access}
+        if chat_request.stream:
+            return openai_chat_stream(chat_request.model, content)
+        return openai_chat_response(chat_request.model, content, atlas=atlas)
 
-    model, data = await generate_text(prompt, request.model)
+    model, data = await generate_text(prompt, chat_request.model)
     content = data.get("response", "")
-    if request.stream:
+    if chat_request.stream:
         return openai_chat_stream(model, content)
     return openai_chat_response(model, content)
 
@@ -726,11 +813,13 @@ async def chat(request: ChatRequest):
 
 
 @app.post("/chat/grounded")
-async def grounded_chat(request: GroundedChatRequest):
-    embedding_model, sources = await retrieve_context(
+async def grounded_chat(http_request: Request, request: GroundedChatRequest):
+    caller = caller_context(http_request)
+    embedding_model, sources, access = await retrieve_context(
         request.prompt,
         request.retrieval_limit,
         request.min_score,
+        caller,
     )
     grounded_prompt = build_grounded_prompt(request.prompt, sources)
     model, data = await generate_text(grounded_prompt, request.model)
@@ -743,6 +832,7 @@ async def grounded_chat(request: GroundedChatRequest):
             "response": data.get("response", ""),
             "done": data.get("done", False),
             "grounded": bool(sources),
+            "access": access,
             "sources": sources,
         }
     )
