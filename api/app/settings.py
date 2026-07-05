@@ -1,6 +1,6 @@
-import os
+﻿import os
 
-APP_VERSION = "0.8.0"
+APP_VERSION = "0.8.11"
 SERVICE_NAME = "atlas-api"
 OPENAI_COMPAT_MODEL = "atlas-grounded"
 
@@ -14,3 +14,15 @@ DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "llama3.1:8b")
 DEFAULT_EMBEDDING_MODEL = os.getenv("DEFAULT_EMBEDDING_MODEL", "nomic-embed-text")
 MEMORY_COLLECTION = os.getenv("MEMORY_COLLECTION", "atlas_memory")
 DOCUMENT_COLLECTION = os.getenv("DOCUMENT_COLLECTION", "atlas_documents")
+
+
+
+
+
+
+
+
+
+
+
+

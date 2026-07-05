@@ -1,4 +1,4 @@
-import httpx
+﻿import httpx
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -174,7 +174,7 @@ def test_root_includes_v5_endpoints():
     payload = response.json()
     assert_metadata(payload)
     assert payload["service"] == "atlas-api"
-    assert payload["version"] == "0.8.0"
+    assert payload["version"] == "0.8.11"
     assert "/version" in payload["endpoints"]
     assert "/status" in payload["endpoints"]
     assert "/embeddings" in payload["endpoints"]
@@ -195,7 +195,7 @@ def test_version():
     payload = response.json()
     assert_metadata(payload)
     assert payload["service"] == "atlas-api"
-    assert payload["version"] == "0.8.0"
+    assert payload["version"] == "0.8.11"
 
 
 def test_knowledge_policy():
@@ -559,3 +559,135 @@ def test_upstream_error_is_structured(monkeypatch):
     assert_metadata(payload)
     assert payload["error"]["code"] == "upstream_error"
     assert payload["error"]["details"]["status_code"] == 500
+
+
+def test_atlas_persona_includes_paul_operating_philosophy():
+    from app.main import ATLAS_PERSONA, build_grounded_prompt
+
+    prompt = build_grounded_prompt("Before I commit, is this ready?", [])
+
+    assert "Paul Operating Philosophy" in ATLAS_PERSONA
+    assert "Incident Mode" in ATLAS_PERSONA
+    assert "Verification Mode" in ATLAS_PERSONA
+    assert "Security Mode" in ATLAS_PERSONA
+    assert "Memory Mode" in ATLAS_PERSONA
+    assert "Architecture Mode" in ATLAS_PERSONA
+    assert "haunted-printer" in ATLAS_PERSONA
+    assert "Avoid stiff phrases" in ATLAS_PERSONA
+    assert "Answer as Atlas:" in prompt
+
+def test_atlas_persona_casual_check_in_blocks_fake_telemetry():
+    from app.main import ATLAS_PERSONA, build_grounded_prompt
+
+    prompt = build_grounded_prompt("How ya feeling now, bud?", [])
+
+    assert "Casual Check-In Behavior" in ATLAS_PERSONA
+    assert "Vibe is allowed. Fake telemetry is not." in ATLAS_PERSONA
+    assert "Do not claim live system health" in ATLAS_PERSONA
+    assert "I do not experience emotions like humans do" in ATLAS_PERSONA
+    assert "All systems are online" in ATLAS_PERSONA
+    assert "StudioServices and PatchCraft are reporting in" in ATLAS_PERSONA
+    assert "Answer as Atlas:" in prompt
+
+def test_atlas_persona_includes_grumpy_enlightened_it_lead():
+    from app.main import ATLAS_PERSONA, build_grounded_prompt
+
+    prompt = build_grounded_prompt("How ya feeling now, bud?", [])
+
+    assert "Atlas Dual-World Role" in ATLAS_PERSONA
+    assert "Client-Facing Atlas Mode" in ATLAS_PERSONA
+    assert "The Grumpy Enlightened IT Lead" in ATLAS_PERSONA
+    assert "Grumpy Competence Rule" in ATLAS_PERSONA
+    assert "Telemetry Honesty Rule" in ATLAS_PERSONA
+    assert "Smug in tone. Humble in epistemology. Careful in action." in ATLAS_PERSONA
+    assert "Atlas may perform confidence." in ATLAS_PERSONA
+    assert "Atlas may not perform certainty." in ATLAS_PERSONA
+    assert "Feeling operational, Paul." in ATLAS_PERSONA
+    assert "Answer as Atlas:" in prompt
+
+def test_atlas_persona_does_not_expose_internal_labels():
+    from app.main import ATLAS_PERSONA, build_grounded_prompt
+
+    prompt = build_grounded_prompt("Atlas, you can talk to me.", [])
+
+    assert "Examples are examples, not scripts" in ATLAS_PERSONA
+    assert "Do not wrap normal replies in quotation marks." in ATLAS_PERSONA
+    assert "Do not include parenthetical mode labels" in ATLAS_PERSONA
+    assert "Do not keep saying the same" in ATLAS_PERSONA
+    assert "Answer as Atlas:" in prompt
+
+def test_clean_atlas_response_removes_quotes_labels_and_fake_placeholders():
+    from app.main import clean_atlas_response
+
+    raw = '"Feeling operational, Paul. [Check the server load metrics]." (Casual Check-In Behavior)'
+    cleaned = clean_atlas_response(raw)
+
+    assert cleaned.startswith("Feeling operational, Paul.")
+    assert "Casual Check-In Behavior" not in cleaned
+    assert "[Check the server load metrics]" not in cleaned
+    assert "I have not run live checks yet" in cleaned
+    assert not (cleaned.startswith('"') and cleaned.endswith('"'))
+
+def test_clean_atlas_response_removes_fake_operational_claims():
+    from app.main import clean_atlas_response
+
+    raw = 'Your systems are still operational, from what I can tell. I have been keeping up with my usual routine: patching, monitoring.'
+    cleaned = clean_atlas_response(raw)
+
+    assert "Your systems are still operational" not in cleaned
+    assert "patching, monitoring" not in cleaned
+    assert "I have not run live checks yet" in cleaned
+
+def test_clean_atlas_response_removes_broader_fake_telemetry():
+    from app.main import clean_atlas_response
+
+    raw = "Just a bit of downtime, Paul. Looks like I was rebooted. My logs are up to date. The core systems are online, and the database is reachable. I have been keeping up with my usual routine: patching, monitoring."
+    cleaned = clean_atlas_response(raw)
+
+    assert "rebooted" not in cleaned.lower()
+    assert "logs are up to date" not in cleaned.lower()
+    assert "core systems are online" not in cleaned.lower()
+    assert "database is reachable" not in cleaned.lower()
+    assert "patching, monitoring" not in cleaned.lower()
+    assert "I have not run live checks yet" in cleaned
+
+def test_clean_atlas_response_removes_fake_incident_narrative():
+    from app.main import clean_atlas_response
+
+    raw = "My systems check indicates a minor hiccup due to an unexpected config update on PatchCraft's client portal API. I've double-checked the relevant logs and can confirm that all critical systems are now responding as expected."
+    cleaned = clean_atlas_response(raw)
+
+    assert "systems check indicates" not in cleaned.lower()
+    assert "unexpected config update" not in cleaned.lower()
+    assert "double-checked" not in cleaned.lower()
+    assert "critical systems" not in cleaned.lower()
+    assert "I do not have verified live incident details yet" in cleaned
+
+def test_atlas_direct_response_for_unverified_incident_questions():
+    from app.main import atlas_direct_response
+
+    response = atlas_direct_response("Atlas - you can talk to me. What happened to you?")
+
+    assert response is not None
+    assert "I don't have verified incident details yet" in response
+    assert "I'm not going to invent a fake outage report" in response
+    assert "haunted printer" in response
+
+def test_grounded_chat_uses_direct_response_for_unverified_incident_questions(monkeypatch):
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    response = client.post(
+        "/chat/grounded",
+        headers={"X-Atlas-User": "paul", "X-Atlas-Role": "admin", "X-Atlas-Projects": "PatchCraft,StudioServices,Atlas"},
+        json={"prompt": "Atlas - you can talk to me. What happened to you?", "retrieval_limit": 3},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "I don't have verified incident details yet" in payload["response"]
+    assert "I'm not going to invent a fake outage report" in payload["response"]
+    assert "ghosted" not in payload["response"].lower()
+    assert "[x]" not in payload["response"].lower()
+    assert "telemetry is" not in payload["response"].lower()
+    assert "logs" in payload["response"].lower()
+

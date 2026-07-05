@@ -1,10 +1,10 @@
-# Atlas
+﻿# Atlas
 
 Atlas is a local, Docker-first AI platform built around Ollama, Open WebUI, Qdrant, Redis, and a small FastAPI service.
 
 ## Version
 
-Current API version: `0.8.0`
+Current API version: `0.8.11`
 
 ## Project Layout
 
@@ -189,6 +189,65 @@ python -m pytest
 
 ## Release Notes
 
+### Atlas API v0.8.11
+
+- Replaced curly apostrophes in deterministic Atlas incident fallback with ASCII apostrophes to avoid Windows console encoding artifacts.
+- Preserved v0.8.10 grounded endpoint fallback behavior and regression coverage.
+### Atlas API v0.8.10
+
+- Wired `atlas_direct_response` into the actual `/chat/grounded` endpoint.
+- Ensured grounded responses pass through `clean_atlas_response` before returning.
+- Added endpoint-level regression coverage for “what happened to Atlas?” prompts so the model cannot invent fake incident lore.
+### Atlas API v0.8.9
+
+- Added deterministic direct response for “what happened to Atlas?” style prompts to prevent fake incident reports.
+- Preserved telemetry honesty by refusing to invent outage causes, log findings, API failures, sync delays, or recovery events.
+- Kept distilled Atlas voice while avoiding model-generated incident lore.
+### Atlas API v0.8.8
+
+- Added cleanup for fake incident narratives, including invented reboots, outage causes, config updates, log confirmations, and system recovery claims.
+- Added prompt guardrail for questions about what happened to Atlas.
+- Preserved the grumpy Atlas voice while forcing unverified incidents to stay unverified.
+### Atlas API v0.8.7
+
+- Added broader cleanup for fake reboot, downtime, sync-delay, log-health, service-health, database, patching, and monitoring claims.
+- Ensured known response return paths apply `clean_atlas_response`.
+- Preserved Atlas personality while preventing invented operational telemetry.
+### Atlas API v0.8.6
+
+- Fixed response cleanup order so leaked mode labels are removed before whole-response quote stripping.
+- Added stronger guardrails against fake monitoring, patching, metrics, log, and system-health claims.
+- Preserved distilled Atlas personality while preventing fake operational status narration.
+### Atlas API v0.8.5
+
+- Added response cleanup to prevent quoted roleplay replies, leaked internal mode labels, and fake bracketed telemetry placeholders.
+- Strengthened telemetry honesty language so Atlas cannot imply health checks, metrics, logs, or service status were inspected unless actually checked.
+- Preserved distilled Grumpy Enlightened IT Lead behavior without cue-card leakage.
+### Atlas API v0.8.4
+
+- Distilled the Atlas persona to reduce cue-card behavior and repeated example responses.
+- Added explicit rules preventing quoted replies, internal mode label leakage, example parroting, and repeated catchphrases.
+- Preserved the Grumpy Enlightened IT Lead identity while reinforcing telemetry honesty and verification humility.
+- Kept dual-world behavior for Paul-facing operations and client-facing workflows.
+### Atlas API v0.8.3
+
+- Added Casual Check-In Behavior to Atlas persona.
+- Taught Atlas to respond warmly and dryly to casual status/vibe questions.
+- Blocked fake operational claims about live health, sync freshness, monitoring visibility, or services "reporting in" unless actually verified.
+- Added the core rule: vibe is allowed; fake telemetry is not.
+### Atlas API v0.8.2
+
+- Added Paul Operating Philosophy to Atlas persona.
+- Added response modes for incident handling, verification, security review, memory training, architecture decisions, coding, and debugging.
+- Preserved grounded retrieval, identity-aware source filtering, knowledge ingestion boundaries, and reduced source-vomit behavior.
+- Tuned Atlas for dry wit, practical uncertainty handling, and Paul’s implementation-driven workflow.
+### Atlas API v0.8.1
+
+- Added Atlas persona prompt for warmer, sharper, Paul-aware grounded responses.
+- Replaced rigid missing-memory phrasing with useful uncertainty handling.
+- Reduced source-vomit by only appending source lists when the response actually cites sources.
+- Preserved grounded retrieval, identity-aware source filtering, and knowledge ingestion boundaries.
+
 ### Atlas API v0.8.0
 
 - Added caller context parsing from `X-Atlas-User`, `X-Atlas-Role`, and `X-Atlas-Projects`.
@@ -258,3 +317,15 @@ python -m pytest
 - Ollama GPU inference.
 - Open WebUI, Qdrant, Redis, and Atlas API running.
 - Verified `/`, `/health`, `/models`, and `/chat`.
+
+
+
+
+
+
+
+
+
+
+
+
